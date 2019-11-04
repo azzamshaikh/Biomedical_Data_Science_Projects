@@ -1,0 +1,802 @@
+---
+title: "Project 1: Personalized medicine and genomics"
+author: "Azzam Shaikh"
+date: "9/22/2019"
+output: html_document
+---
+Several major themes in personalized medicine can be made clear by examining the lung tumor data.This project aims to look at the phenomena of mutual exclusivity, and how different carcinogens(i.e. Smoking) change the mutations found in tumors as well as the age of onset.
+
+This project uses data that was directly downloaded from the TCGA data repository. Just like in real life, there is more data in the project than you require to complete the task.
+
+All of the data can be found in the Lab4_project1 folder that is located within the Wk4 folder.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+```
+
+## Open the clinical data in the clinical information tab.(5pts)
+Lets go step by step through the clinical data. 
+Note that there are now 3 different file folders with 3 different data types.
+You will have to use a script to open the folder with the clinical data
+Use the "clin.merged" clinical data set for this section of the assigment.
+Make sure to look at the data and become familiar with it.
+
+```{r Import Data}
+# Set directory to current folder and store location 
+setwd("C:/Users/Owner/Documents/Penn State/Senior/BME 497/Project 1/")
+dir = getwd()
+
+# Create a list of the files in the current directory
+dirFiles = list.dirs(dir, full.names = T)
+
+# Create a general expression to get into the 'Clinical_informations' folder
+clinical = grep('Project 1/Clinical_informations',dirFiles)
+mutation = grep('Project 1/Mutation_data',dirFiles)
+
+# Open only a specified file
+clindata = list.files(dirFiles[clinical],pattern = "clin.merged.txt", ignore.case = F)
+mutdata = list.files(dirFiles[mutation],pattern = "^TCGA-[0-9]{2}-[0-9]{4}-[0-9]{2}.maf.txt*", ignore.case = F)
+```
+
+## Go through the clinical data(10pts)
+Now that you have opened the clinical data and become familiar with it, you will need to create a data frame and then write it to a csv file.
+
+This data frame should include a row for each patient and it should include columns that have the following data:
+
+TCGA id,smoking history(note that there are multiple types of information here, please grab them all), age at diagnosis, and anything that you think you might be interested in.
+Note that the assignment requires you to examine a data hypothesis that YOU come up with. This means that it is neccessary to grab some clinical parameter that interests you.
+HINT:You may need to use t() function to change the row/columns
+
+
+```{r Import the data frame, warning = FALSE}
+# Extract the data in the 'clin.merged' file
+clin_merged = read.table(paste(dirFiles[clinical],"/",clindata,sep = ""), stringsAsFactors = F, header = F, sep = "\t", fill = T, quote = "")
+
+# Enable data.table library
+library(data.table)
+
+# Transpose the matrix
+clin_merged = transpose(clin_merged)
+
+# Move column names up
+colnames(clin_merged) = clin_merged[1,]
+
+# Remove extra column with column names
+clin_merged = clin_merged[-1,]
+
+# Adjust the row numbers to start from 1 
+rownames(clin_merged) = 1:nrow(clin_merged)
+```
+
+```{r Extract key clinical information}
+# information to extract
+  # TCGA ID                                           --> patient.bcr_patient_barcode
+  # Smoking history (multiple types of information)   --> patient.stopped_smoking_year, patient.number_pack_years_smoked,
+                                                        # patient.tabacco_smoking_history 
+  # age at diagnosis                                  --> patient.age_at_initial_pathologic_diagnosis
+  # anything else                                     --> patient.person_neoplasm_cancer_status; patient.vital_status,
+                                                        # patient.year_of_tobacco_smoking_onset
+
+
+# Pre allocate matrix based on the identified information above
+output_clin = matrix(nrow = nrow(clin_merged),ncol = 8)
+
+# Add in information to the matrix
+output_clin[,1] = clin_merged$patient.bcr_patient_barcode
+output_clin[,2] = clin_merged$patient.stopped_smoking_year
+output_clin[,3] = clin_merged$patient.number_pack_years_smoked
+output_clin[,4] = clin_merged$patient.tobacco_smoking_history
+output_clin[,5] = clin_merged$patient.age_at_initial_pathologic_diagnosis
+output_clin[,6] = clin_merged$patient.person_neoplasm_cancer_status
+output_clin[,7] = clin_merged$patient.vital_status
+output_clin[,8] = clin_merged$patient.year_of_tobacco_smoking_onset
+
+# Convert the output matrix to a data frame
+clinOutFrame = data.frame(output_clin)
+
+# Create column names for the output/csv matrix
+colnames(clinOutFrame)[1:8]=c("TCGA_ID","Year Smoking Stopped","Number of Packs Smoked","Tobacco Smoking History","Age","Neoplasm Cancer Status","Vital Status","Years of Tobacco Smoking Onset")
+
+# Write the CSV file to the current directory
+write.csv(clinOutFrame, file = "Smoking_data.csv")
+```
+## Go through the genetic mutation data(10pts)
+Extract mutation data for 3 genes EGFR, KRAS, ALK. Please extract the amino acid mutation information.
+
+These mutations can be of ANY type. 
+
+For each patient you will need to extract all of the mutations for each of these 3 genes. Note that there may be more than 1 mutation in each of the three genes.
+Note the data type of the mutation.
+
+The output should be a dataframe where the number of rows equals the number of patients in the files. The columns should be TCGA id, EGFR muts, ALK muts, KRAS muts. If there is more than one mutation per gene, please concatenate the strings describing each individual mutation using the paste command.
+
+## Note that there will be some file reading bugs when you try to open all the files in your loop. I fixed these bugs in the 230 examples from class, but there was a real bug in the original files that was annoying. I want you to get comfortable with trouble shooting these kinds of things. There are multiple ways to fix the bug. This includes potentially altering the original text files that are causing the error. Make sure that when you encounter the file load error that you identify the exact identity of the file that is causing the error. Do this by examining the counter in your loop with a print(i) statement.
+
+## YOU will have to solve this now, and it will be annoying and frustrating, Stick with it! You have 2 weeks. I got pissed too. But this is what happens with REAL data, sometimes files get made with differences that screw things up.
+```{r Import mutation data}
+# Pre-allocate output matrix
+output_mut = matrix(data = NA, nrow = length(mutdata), ncol = 4)
+
+# Add column names to matrix
+colnames(output_mut) = c("TCGA_ID", "EGFR" ,"ALK" ,"KRAS")
+
+# Convert matrix to data framee
+output_mut = data.frame(output_mut)
+
+# Add TCGA ID
+output_mut[,1] = mutdata
+
+# Create a variable stating the current row 
+row = 1
+
+# Loop through the TCGA files 
+for(i in 1:length(mutdata)){
+  
+  # Read each file in the folder as the loop runs through
+  mut = read.table(paste(dirFiles[mutation],"/",mutdata[i],sep = ""), stringsAsFactors = F, header = T, sep = "\t", fill = T, quote = "")
+  
+  # Add every occurence of the mutation in the EGFR matrix
+  EGFR= mut[grepl("^EGFR$",mut$Hugo_Symbol),] #grep(mut$Hugo_Symbol, value = F, ignore.case = T, pattern = "EGFR")# #mut[mut$Hugo_Symbol == "EGFR",]
+  KRAS= mut[grepl("^KRAS$",mut$Hugo_Symbol),] #grep(mut$Hugo_Symbol, value = F, ignore.case = T, pattern = "KRAS")# #mut[mut$Hugo_Symbol == "KRAS",]
+  ALK = mut[grepl("^ALK$",mut$Hugo_Symbol),] #grep(mut$Hugo_Symbol, value = F, ignore.case = T, pattern = "ALK")#mut[mut$Hugo_Symbol == "ALK",]
+
+  # Create empty mutation output strings after every loop iteration
+  EGFRout=('')
+  ALKout=('')
+  KRASout=('')
+
+  counter1=0
+  counter2=0
+  counter3=0 
+  
+  if (nrow(EGFR)>0){
+    for (counter1 in 1:nrow(EGFR)) {
+      EGFRout= paste(EGFRout," | Amino Acid Change: ",EGFR$Protein_Change[counter1],"(Mutation Type:",EGFR$Variant_Classification[counter1],") |", sep="" )
+    }
+    output_mut[row,2]= EGFRout
+  }
+  
+  
+  
+  if (nrow(ALK)>0){
+    for (counter2 in 1:nrow(ALK)) {
+      ALKout= paste(ALKout," | Amino Acid Change: ",ALK$Protein_Change[counter2],"(Mutation Type: ",ALK$Variant_Classification[counter2],") |", sep="" )
+    }
+    output_mut[row,3]= ALKout
+  }
+  
+  
+  
+  if (nrow(KRAS)>0){
+    for (counter3 in 1:nrow(KRAS)) {
+      KRASout= paste(KRASout," | Amino Acid Change: ",KRAS$Protein_Change[counter3],"(Mutation Type: ",KRAS$Variant_Classification[counter3],") |", sep ="" )
+    }
+    output_mut[row,4]= KRASout
+  }
+  
+  row=row+1
+}
+# Write the CSV file to the current directory
+write.csv(output_mut, file = "Mutation_data.csv")
+
+```
+
+## Create contingency tables and assess mutual exclusivity for KRAS, EGFR, and ALK(10pts)
+A 2 by 2 contingency table with mutations and without mutations for each pair of genes in the mapk pathway. I will teach you what a contingency table is in class. To analyze this table you will need to perform a fisher's exact test using the fisher.test command.
+The fisher.test output should be used to build your answer. The data frame that you create in this section should have three rows containing all three pairwise comparisons that are possible for the KRAS, EGFR, and ALK genes. The columns should have odds ratios and pvalues.
+```{r}
+# Create a table for the KRAS and EGFR
+
+# Preallocate variables to store the contingency table values
+a = 0
+b = 0
+c = 0
+d = 0
+
+# Loop through the mutation data frame and find the relationship between EGFR and KRAS
+for(i in 1:nrow(output_mut)){
+  if(is.na(output_mut$EGFR[i]) == FALSE & is.na(output_mut$KRAS[i]) == FALSE){
+    a = a + 1
+  }
+  if(is.na(output_mut$EGFR[i]) == TRUE & is.na(output_mut$KRAS[i]) == FALSE){
+    b = b + 1
+  }
+  if(is.na(output_mut$EGFR[i]) == FALSE & is.na(output_mut$KRAS[i]) == TRUE){
+    c = c + 1
+  }
+  if(is.na(output_mut$EGFR[i]) == TRUE & is.na(output_mut$KRAS[i]) == TRUE){
+    d = d + 1
+  }
+}
+
+# Create the actual matrix and perform Fisher's exact test
+KRASandEGFR = matrix(c(a, c, b, d), nrow = 2, ncol = 2)
+dimnames(KRASandEGFR) = list(c('KRAS w/ Mut','KRAS w/o Mut'),c('EGFR w/ Mut','EGFR w/o Mut'))
+KRASandEGFR_fisher = fisher.test(KRASandEGFR)
+
+#----------------------------------------------------------------------------------------
+
+# Create a table for the ALK and EGFR
+
+# Preallocate variables to store the contingency table values
+e = 0
+f = 0
+g = 0
+h = 0
+
+# loop through the mutation data frame and ifn the relationship between EGFR and ALK
+for(i in 1:nrow(output_mut)){
+  if(is.na(output_mut$EGFR[i]) == FALSE & is.na(output_mut$ALK[i]) == FALSE){
+    e = e + 1
+  }
+  if(is.na(output_mut$EGFR[i]) == TRUE & is.na(output_mut$ALK[i]) == FALSE){
+    f = f + 1
+  }
+  if(is.na(output_mut$EGFR[i]) == FALSE & is.na(output_mut$ALK[i]) == TRUE){
+    g = g + 1
+  }
+  if(is.na(output_mut$EGFR[i]) == TRUE & is.na(output_mut$ALK[i]) == TRUE){
+    h = h + 1
+  }
+}
+
+# Create the actual matrix and perform Fisher's exact test
+ALKandEGFR = matrix(c(e, g, f, h), nrow = 2, ncol = 2)
+dimnames(ALKandEGFR) = list(c('ALK w/ Mut','ALK w/o Mut'),c('EGFR w/ Mut','EGFR w/o Mut'))
+ALKandEGFR_fisher = fisher.test(ALKandEGFR)
+
+#----------------------------------------------------------------------------------------
+
+# Create a table for the KRAS and ALK
+
+# Preallocate variables to store teh contingency table values
+j = 0
+k = 0
+l = 0
+m = 0
+
+# Loop through the mutation data frame and find the relationship between KRAS and ALK
+for(i in 1:nrow(output_mut)){
+  if(is.na(output_mut$ALK[i]) == FALSE & is.na(output_mut$KRAS[i]) == FALSE){
+    j = j + 1
+  }
+  if(is.na(output_mut$ALK[i]) == TRUE & is.na(output_mut$KRAS[i]) == FALSE){
+    k = k + 1
+  }
+  if(is.na(output_mut$ALK[i]) == FALSE & is.na(output_mut$KRAS[i]) == TRUE){
+    l = l + 1
+  }
+  if(is.na(output_mut$ALK[i]) == TRUE & is.na(output_mut$KRAS[i]) == TRUE){
+    m = m + 1
+  }
+}
+
+# Create the actual matrix and perform Fisher's exact test
+KRASandALK = matrix(c(j, l, k, m), nrow = 2, ncol = 2)
+dimnames(KRASandALK) = list(c('KRAS w/ Mut','KRAS w/o Mut'),c('ALK w/ Mut','ALK w/o Mut'))
+KRASandALK_fisher = fisher.test(KRASandALK)
+
+# Create a final matrix that outputs the different mutations and their odds ratio and p values
+contingency_output = matrix(c(KRASandEGFR_fisher$estimate, ALKandEGFR_fisher$estimate, KRASandALK_fisher$estimate, KRASandEGFR_fisher$p.value, ALKandEGFR_fisher$p.value, KRASandALK_fisher$p.value),nrow = 3, ncol = 2)
+dimnames(contingency_output) = list(c('KRAS and EGFR','ALK and EGFR', 'KRAS and ALK'),c('Odds Ratio','P-Value'))
+
+KRASandEGFR
+ALKandEGFR
+KRASandALK
+contingency_output
+```
+
+## Discuss your interpretation of the data(5pts)
+What is the biggest(largest odds ratio)effect in the data set?
+
+-> The largest odd ratio, or the biggest effect, in the data set is the ratio between the EGFR and ALK mutations at 1.194. Odd's ratio is used to measure the strength of association between two values. Since the ratio is greater than 1, EGFR and ALK can be considered correlated. Therefore, this shows that if EGFR is present, there is a higher chance that ALK is also present and vice versa. 
+
+What is the most significant(lowest p value)?
+
+-> The lowest p value, or most significant, in the data set is the value of the EGFR and KRAS mutations at 0.0001227. The null hypothesis from a Fisher's exact test is that one variable, or mutation in this case, is independent of another mutation. Since the p-value between EGFR and KRAS is < 0.05, we can reject the null hypothesis and accept the alternate hypothesis: which is that the two mutations are not independent of each other. 
+
+#----------------------------------------------------------------------------------------------------------------------------------
+
+## Now cross reference the mutation data to the clinical data(10pts)
+Create a merged dataframe that combines your mutation data and your clinical data frame by learning how to use the merge() function.
+
+Merge requires some column of data(here patient ids) to be formatted identically.
+Then merge will make one master dataset where the rows are all rows in common, and the columns are all the columns from both of the datasets to be merged.
+
+```{r}
+# Convert the patient ID in the output_clin data frame from 'tcga' to 'TCGA'
+clinOutFrame = as.matrix(clinOutFrame) 
+clinOutFrame = sub("tcga-","TCGA-",clinOutFrame)
+
+# Remove the extra stuff in the TCGA ID for the mutation data frame (e.g. TCGA-05-4249-01.maf.txt -> TCGA-05-4249)
+output_mut = as.matrix(output_mut)
+for(i in 1:nrow(output_mut)){
+  current = output_mut[i,1]
+  new = substring(current,1,12)
+  output_mut[i,1] = new
+}
+
+# Merge the two data frames based on the column of TCGA_ID 
+merged = merge(clinOutFrame,output_mut, by = "TCGA_ID")
+mergedframe = as.data.frame(merged)
+write.csv(merged,file = "Master_dataset.csv")
+```
+
+## Examine relationships between clinical variables and genetics(10pts)
+Smoking is known to affect the types of mutations that occur in lung cancer, as well as the genes that they occur in. 
+
+Are there any mutations that are associated with age or any of the smoking scores.
+
+Please note that some of you will not know what to do because there is more than one way to answer this question. This is the nature of real world data analysis. Someone has a question and we try to answer it using the data. To do this we may have to interpret the question and make an assumption. This is fine. just state your assumption and why your analysis is reasonable alongside your answer, and if it is reasonable and you don't have an error I will give full credit.
+
+Try the ggplot2 package, but If you decide you would rather use base R plots, that is fine too.
+
+One very reasonable way to do this is to tally mutations of a gene( say EGFR) in patients with different types of smoking variables or bins of ages. I want to know how smoking affects the propensity to develop EGFR, ALK, or KRAS mutations. Do smokers(or heavy smokers tend to have more mutatios in a certain gene). Another way is to ask whether patients with a certain type of mutation tend to be 1. smokers or not 2. heavier smokers. In this case patients have or don't have the mutation of interest, and we compare smoking between them.
+
+I also want to know if age affects EGFR, ALK or KRAS mutations.
+
+```{r warning=FALSE}
+# Create a new data frame in order to keep the original data frame with the same values
+newmerge = mergedframe
+
+# Rewrite the mutations in terms of them being present or not each TCGA ID
+newmerge$EGFR = !is.na(newmerge$EGFR)
+newmerge$ALK = !is.na(newmerge$ALK)
+newmerge$KRAS = !is.na(newmerge$KRAS)
+
+# Convert the data frame to a matrix
+newmerge = as.matrix(newmerge)
+
+# Get locations of the mutations
+EGFRlocation = grep(newmerge[,9], pattern = "TRUE")
+ALKlocation = grep(newmerge[,10], pattern = "TRUE")
+KRASlocation = grep(newmerge[,11], pattern = "TRUE")
+```
+
+*************---------------------------ANALYSIS---------------------------*************
+
+----------------------------------------------------------------------------------------
+
+*************-------------Years stopped smoking vs. Mutations--------------*************
+
+----------------------------------------------------------------------------------------
+
+Assumption: The earlier that one has stopped smoking, the less likely they are to have mutations.
+
+
+```{r Years stopped smoking vs. Mutations}
+par(mfrow = c(1,3))
+# (1) Year Stopped vs. EGFT
+EGFRstopped = mergedframe$`Year Smoking Stopped`[EGFRlocation]
+EGFRstopped = na.omit(as.numeric(levels(EGFRstopped)[EGFRstopped]))
+hist(EGFRstopped, xlab= "EGFR", main = "EGFR vs Years Stopped")
+
+# (2) Year Stopped vs. ALK
+ALKstopped = mergedframe$`Year Smoking Stopped`[ALKlocation]
+ALKstopped = na.omit(as.numeric(levels(ALKstopped)[ALKstopped]))
+hist(ALKstopped, xlab = "ALK", main = "ALK vs. Years Stopped")
+
+# (3) Year Stopped vs. KRAS
+KRASstopped = mergedframe$`Year Smoking Stopped`[KRASlocation]
+KRASstopped = na.omit(as.numeric(levels(KRASstopped)[KRASstopped]))
+hist(KRASstopped, xlab = "KRAS", main = "KRAS vs. Years Stopped")
+
+```
+
+Based on the histograms, for the ALK and KRAS mutations, it can be seen that there is a lower frequency of mutations when smoking was stopped around ~1990-2000. Due to these graphs, we can conlucde that patients who stopped smoking prior to ~1990-2000, they are less likely to have ALK and KRAS mutations. For the EGFR mutations, there is a slight increase in frequency in EGFR mutations between 1970 and 1980. If you had stopped smoking around 1960, then you will be less likely to have an EGFR mutation. However, there is a decrease after 2010, This is most likely due to an incomplete data set so there is not enough evidence to conclude that an EGFR mutation decreases when one stopped smoking after 2010. This also applies to KRAS, when it comes to the sharp decrease after 2010. This is most likely due to an incomplete data set thus we can't conclude that KRAS mutations decrease if you stop smoking around 2010. 
+
+As a recap, what can be concluded is that: for EGFR and its slightly more normal distribution, you would have had to stop smoking around 1960 in order to not get a mutation; for ALK and KRAS and their more right skewed distribution, you would have had to stop smoking around 1990 in order to not get a mutation. This conclusion supports the assumption as patients who stopped smoking earlier have a lower frequency of a mutation.
+
+----------------------------------------------------------------------------------------
+
+*************-------------Number of packs smoked vs. Mutations-------------*************
+
+----------------------------------------------------------------------------------------
+
+Assumption: Based off the results from the Fisher's test, I am under the assumption that the number of packs smoked for the ALK and KRAS are going to be similar to that of the EGFR.
+
+```{r Number of packs smoked vs. Mutations}
+
+par(mfrow = c(1,3))
+# (1) Number of packs smoked vs. EGFR
+EGFRpacks = mergedframe$`Number of Packs Smoked`[EGFRlocation]
+EGFRpacks = as.numeric(EGFRpacks)
+boxplot(EGFRpacks, ylab = "Number of packs smoked", main = "EGFR vs. Packs Smoked")
+EGFRpacks_summary = summary(EGFRpacks)
+EGFRpacks_sd = sd(na.omit(as.numeric(EGFRpacks)))
+
+# (2) Number of packs smoked vs. ALK
+ALKpacks = mergedframe$`Number of Packs Smoked`[ALKlocation]
+ALKpacks = as.numeric(ALKpacks)
+boxplot(ALKpacks, ylab = "Number of packs smoked", main = "ALK vs. Packs Smoked")
+ALKpacks_summary = summary(ALKpacks)
+ALKpacks_sd = sd(na.omit(as.numeric(ALKpacks)))
+
+# (3) Number of packs smoked vs. KRAS
+KRASpacks = mergedframe$`Number of Packs Smoked`[KRASlocation]
+KRASpacks = as.numeric(KRASpacks)
+boxplot(KRASpacks, ylab = "Number of packs smoked", main = "KRAS vs. Packs Smoked")
+KRASpacks_summary = summary(KRASpacks)
+KRASpacks_sd = sd(na.omit(as.numeric(KRASpacks)))
+
+```
+
+
+Based on the EGFR graph, it can be seen that the range of the people who do have the EGFR mutation have smoked 3-95 packs while the mean is 46.42 packs, the median is 55.5 packs and the standard deviation is 29.38 packs. 
+
+Based on the ALK graph, it can be seen that the range of the people who do have the ALK mutation have smoked 3-95 packs while the mean is 50.82 packs, the median is 48.50 packs, and the standard deviation is 23.49 packs.
+
+Based on the KRAS graph, it can be seen that the range of the people who do have the EGFR mutation have smoked 2-93 packs while the mean is 43.86 packs, the median is 43.00 packs, and the standard deviation is 25.20 packs.
+
+The EGFR and ALK mutations have a z score of -0.15 while the EGFR and KRAS mutations have a z score of 0.09. Since these values are very small, it means that the means of the ALK and KRAS packs smoked are close to the mean of the EGFR packs smoked and can assume that the means are equal. This supports the assumption made.
+
+----------------------------------------------------------------------------------------
+
+*************----------------Smoking history vs. mutations-----------------*************
+
+----------------------------------------------------------------------------------------
+
+* = primary interests
+ --> 1: lifelong non smoker*  
+ --> 2: current smoker*
+ --> 3: Current reformed smoker for >15 years
+ --> 4: current reformed smoker for <= 15 years*
+ --> 5: current reformed smoker duration not specified
+ --> 6: smoker at diagnosis* <- Based on the data frame that was collected, there are no instances of a smoker at diagnosis
+ --> 7: smoking history not documented
+
+Assumption: I am under the assumption that, if a person is a lifelong non smoker, they will have very few, if any, of the three mutations. If a person is a current smoker, I am under the assumption they will have higher levels of all three of the mutations. Finally, if a person is a current reformed smoker for <= 15 years (i.e. A person who was not smoking at the time of the interview but has smoked at least 100 cigarettes in their life.), they will have high mutation numbers but not as high as the current smoker.
+
+```{r Smoking history vs. Mutations, warning= FALSE}
+# Create data frames for each of the different smoking histories and the different mutations
+nonsmokeridx = grep(mergedframe$`Tobacco Smoking History`, pattern = 1)
+nonsmokermat = mergedframe[c(nonsmokeridx),]
+nonsmokerEGFR = length(grep(nonsmokermat[,9],pattern = "Amino"))
+nonsmokerALK = length(grep(nonsmokermat[,10],pattern = "Amino"))
+nonsmokerKRAS = length(grep(nonsmokermat[,11],pattern = "Amino"))
+
+currentsmokeridx = grep(mergedframe$`Tobacco Smoking History`, pattern = 2)
+currentsmokermat = mergedframe[c(currentsmokeridx),]
+currentsmokerEGFR = length(grep(currentsmokermat[,9],pattern = "Amino"))
+currentsmokerALK = length(grep(currentsmokermat[,10],pattern = "Amino"))
+currentsmokerKRAS = length(grep(currentsmokermat[,11],pattern = "Amino"))
+
+reformedsmokeridx = grep(mergedframe$`Tobacco Smoking History`, pattern = 4)
+reformedsmokermat = mergedframe[c(reformedsmokeridx),]
+reformedsmokerEGFR = length(grep(reformedsmokermat[,9],pattern = "Amino"))
+reformedsmokerALK = length(grep(reformedsmokermat[,10],pattern = "Amino"))
+reformedsmokerKRAS = length(grep(reformedsmokermat[,11],pattern = "Amino"))
+
+startingsmokeridx = grep(mergedframe$`Tobacco Smoking History`, pattern = 6)
+startingsmokermat = mergedframe[c(startingsmokeridx),]
+startingsmokerEGFR = length(grep(startingsmokermat[,9],pattern = "Amino"))
+startingsmokerALK = length(grep(startingsmokermat[,10],pattern = "Amino"))
+startingsmokerKRAS = length(grep(startingsmokermat[,11],pattern = "Amino"))
+
+# Plot the relationship between the different smoking levels on each respective mutation
+par(mfrow = c(1,3))
+
+# EGFR vs. Smoking Histories
+plot(c(nonsmokerEGFR,currentsmokerEGFR,reformedsmokerEGFR), main = "EGFR vs Smoker Levels", ylab = "EGFR Frequency", xlab = "", labels = FALSE)
+axis(1 ,at = c(1,2,3),labels= c("Non\nsmoker","Current\nSmoker", "Reformed\nSmoker"), las = 1)
+axis(2 ,at = 2:10)
+
+# ALK vs. Smoking Histories
+plot(c(nonsmokerALK,currentsmokerALK,reformedsmokerALK),main = "ALK vs Smoker Levels", ylab = "ALK Frequency", xlab = "", labels = FALSE)
+axis(1, at = c(1,2,3),labels= c("Non\nsmoker","Current\nSmoker", "Reformed\nSmoker"), las =1)
+axis(2, at = 0:15)
+
+# KRAS vs. Smoking Histories
+plot(c(nonsmokerKRAS,currentsmokerKRAS,reformedsmokerKRAS), main = "KRAS vs Smoker Levels", ylab = "KRAS Frequency", xlab = "",labels = FALSE)
+axis(1, at = c(1,2,3), labels = c("Non\nsmoker","Current\nSmoker", "Reformed\nSmoker"), las = 1)
+axis(2, at = 5:30)
+
+
+```
+
+Based on the EGFR graph, apparently there is a higher chance of having the EGFR mutation if you are a lifelong non smoker. The risk is extremely low for current smokers but will get higher if you have stopped within the last 15 years.
+
+Based on the ALK graph, being a lifelong non-smoker, ones chances of obtaining an ALK mutation is very slim. The chances of getting a mutation increase if you are a current smoker and increase even more if you have stopped smoking within the last 15 years.
+
+Based on the KRAS graph, if you are a lifelong non-smoker, you still have a chance of obtaining a KRAS mutation. These chances increase if you are a current smoker and they increase even more if you have stopped smoking within the last 15 years. 
+
+Lifelong nonsmoker: It can be concluded that if you are a lifelong non-smoker, you have a high chance of obtaining an EGFR mutation while the chances of getting an ALK and KRAS mutation are slim. However, tying in the results from the Fisher's test, having an EGFR mutation means that there is a chance that one can obtain both the KRAS and ALK mutations due to their correlation. This goes against my assumption and is most likely a cause of second hand smoking or even onset.
+
+Current smoker: It can be concluded that if you are a current smoker, you have a low chance of getting an EGFR mutation but the chances increase for an ALK mutation and even more for a KRAS mutation. Due to the correlation of the ALK from the Fishers test, the chance of getting EGFR mutation can increase. This goes against my assumption as the mutation occurrences for a current smoker are not the highest. 
+
+Reformed smoker within the last 15 years: It can be concluded that if you have stopped smoking within the last 15 years, the chances of obtaining the EGFR, ALK, and KRAS mutations are extremely high. This goes against my assumption as the mutation occurences are not the second highest, rather they are the first highest. There maybe some relationship between the withdrawl effects that one has after they stop smoking and these mutations. 
+
+----------------------------------------------------------------------------------------
+
+*************----------------------Age vs. mutations-----------------------*************
+
+----------------------------------------------------------------------------------------
+
+Assumption: Based on the data outputted from the Fisher's exact test, I am expecting the age of all three of the mutations to be similar. Since there is a correlation between EGFR and ALK and EGFR and KRAS, the mean age for ALK and KRAS should be close to the mean age of EGFR. 
+
+```{r Age vs. Mutations}
+par(mfrow = c(1,3))
+
+# (1) Age vs. EGFR
+EGFRage = mergedframe$Age[EGFRlocation]
+EGFRage = as.numeric(EGFRage)
+boxplot(EGFRage, ylab = "Age", main = "EGFR vs. Age")
+EGFRage_summary = summary(EGFRage)
+EGFRage_sd = sd(na.omit(as.numeric(EGFRage)))
+
+
+# (2) Age. vs ALK
+ALKage = mergedframe$Age[ALKlocation]
+ALKage = as.numeric(ALKage)
+boxplot(ALKage,  ylab = "Age", main = "ALK vs. Age")
+ALKage_summary = summary(ALKage)
+ALKage_sd = sd(na.omit(as.numeric(ALKage)))
+
+
+# (3) Age. vs KRAS
+KRASage = mergedframe$Age[KRASlocation]
+KRASage = as.numeric(KRASage)
+boxplot(KRASage, ylab = "Age", main = "KRAS vs. Age")
+KRASage_summary = summary(KRASage)
+KRASage_sd = sd(na.omit(as.numeric(KRASage)))
+
+```
+
+
+Based on the EGFR graph, it can be seen that the range of the people who do have the EGFR mutation are between 9-48 years of age while the mean is 30.75 years and the standard deviation is 8.9 years.
+
+Based on the ALK graph, it can be seen that the range of the people who do have the ALK mutation are between 10-49 years of age while the mean is 28.64 years and the standard deviation is 10.11 years.
+
+Based on the KRAS graph, it can be seen that the range of the  people who do have the KRAS mutation are between 6-49 years of age while the mean is 30.99 years and the standard deviation is 9.41 years.
+
+The EGFR and ALK mutations have a z score of 0.24 and EGFR and KRAS mutations have a z score of -0.03. Since these values are very small, it means that the means of the ALK and KRAS ages are close to the mean of the EGFR age and can assume that the means are equal. This supports my assumption that was made.
+
+----------------------------------------------------------------------------------------
+
+*************------------------Vital status vs. mutations------------------*************
+
+----------------------------------------------------------------------------------------
+
+Assumption: Based on the knowledge that cancers grow in stages and are not an immediate cause of death upon diagnosis, I am assuming that a majority of the people who have been diagnoised with any of the 3 mutations are still alive.
+
+```{r Vital Status vs. Mutations}
+
+par(mfrow = c(1,3))
+
+# (1) Vitals vs. EGFR
+EGFRvital = mergedframe$`Vital Status`[EGFRlocation]
+EGFRvital = (sub(pattern = "alive", replacement = 1,EGFRvital))
+EGFRvital = (sub(pattern = "dead", replacement = 0,EGFRvital))
+EGFRvital = as.numeric(EGFRvital)
+hist(EGFRvital, breaks = 2,main = "EGFR vs Vital Status", xlab = "EGFR", axes = FALSE)
+axis(1, at = c(0,1), labels = c("Dead", "Alive"))
+axis(2, at = 0:20)
+
+# (2) Vitals vs. ALK
+ALKvital = mergedframe$`Vital Status`[ALKlocation]
+ALKvital = (sub(pattern = "alive", replacement = 1,ALKvital))
+ALKvital = (sub(pattern = "dead", replacement = 0,ALKvital))
+ALKvital = as.numeric(ALKvital)
+hist(ALKvital, breaks = 2,main = "ALK vs Vital Status", xlab = "ALK", axes = FALSE)
+axis(1, at = c(0,1), labels = c("Dead", "Alive"))
+axis(2, at = 0:15)
+
+# (3) Vitals vs. KRAS
+KRASvital = mergedframe$`Vital Status`[KRASlocation]
+KRASvital = (sub(pattern = "alive", replacement = 1,KRASvital))
+KRASvital = (sub(pattern = "dead", replacement = 0,KRASvital))
+KRASvital = as.numeric(KRASvital)
+hist(KRASvital, breaks = 2,main = "KRAS vs Vital Status", xlab = "KRAS", axes = FALSE)
+axis(1, at = c(0,1), labels = c("Dead", "Alive"))
+axis(2, at = 0:60)
+
+```
+
+Based on the histogram made, it can be seen that there are a larger number of people who are alive with all of the different mutations.
+
+----------------------------------------------------------------------------------------
+
+*************-----------------Smoking onset vs. mutations------------------*************
+
+----------------------------------------------------------------------------------------
+
+Assumption: Based on the knowledge that "onset of cigarette smoking typically occurs during childhood or early adolescence. Nicotine dependence symptoms can manifest soon after onset, contributing to sustained, long-term smoking" [1], I dont really expect any relations between the onset and any of the mutations. 
+
+```{r Smoking onset vs mutations}
+par(mfrow = c(1,3))
+
+# (1) EGFR vs. Smoking onset
+EGFRonset = mergedframe$`Years of Tobacco Smoking Onset`[EGFRlocation]
+EGFRonset = na.omit(as.numeric(levels(EGFRonset)[EGFRonset]))
+boxplot(EGFRonset, xlab = "EGFR", ylab = "Years of Smoking Onset", main = "EGFR vs. Smoking Onset")
+
+# (2) ALK vs. Smoking onset
+ALKonset = mergedframe$`Years of Tobacco Smoking Onset`[ALKlocation]
+ALKonset = na.omit(as.numeric(levels(ALKonset)[ALKonset]))
+boxplot(ALKonset, xlab = "ALK", ylab = "Years of Smoking Onset", main = "ALK vs Smoking Onset")
+
+# (3) KRAS vs. Smoking onset
+KRASonset = mergedframe$`Years of Tobacco Smoking Onset`[KRASlocation]
+KRASonset = na.omit(as.numeric(levels(KRASonset)[KRASonset]))
+boxplot(KRASonset, xlab = "KRAS", ylab = "Years of Smoking Onset", main = "KRAS vs. Smoking Onset")
+
+```
+
+Based on the plot produced, there does not seem to be any notable trends between the year the onset began and the mutations. The mean of all of the samples seem to be around the year of 1960. 
+
+----------------------------------------------------------------------------------------
+
+## Test any hypothesis of your choice in the dataset and present the data below(10pts)
+Feel free to email me questions if you have trouble understanding the notation
+Literally anything, ask a question of the data that you have and type an answer below.
+The only requirement is that it must have some sort of analysis.
+
+i.e. Do X patients have More Y
+Or Is z mutually exclusive with x
+Or is A correlated with B
+Or what proportion of patients have XXX, Is this higher or lower in group yyy
+
+You might need to look up an appropriate statistic! Or come chat with me and we can find one.
+----------------------------------------------------------------------------------------
+
+*************--------------Neoplasm cancer status vs. mutations------------*************
+
+----------------------------------------------------------------------------------------
+
+I am curious to see if the neoplasm cancer status has any relationship to the different mutations. 
+
+Neoplasm is essentially another term for a tumor.
+
+EGFR is a type of protein that is found on the surface of cells in the body. If this cell becomes too active, it can lead to cancer growth.
+
+The ALK mutation is the genetic alteration of ones lung cells DNA that causes cells to grow abnormally and end up behaving as cancer cells.
+
+The KRAS gene acts as an on/off switch in cell signalling. If this gene becomes mutated, the negative signalling gets disrupted and cells will continiously proliferate and develop into a cancer.
+
+Assumption: Based on these descriptions, I am under the assumption that people who have a tumor will most likely have a higher ALK mutation count as compared to the other mutations since smoking affects the lungs directly. For the people who are tumor free, I am expecting the ALK mutation count to be the highest for the same reason as smoking will pose the biggest threat to developing lung cancer. 
+
+```{r Neoplasm cancer status vs. Mutations}
+
+# (1) Mutations vs. tumor free diagnosis
+tumorfreeidx = grep(mergedframe$`Neoplasm Cancer Status`, pattern = "tumor free")
+tumorfreemat = mergedframe[c(tumorfreeidx),]
+tumorfreeEGFR = length(grep(tumorfreemat[,9],pattern = "Amino"))
+tumorfreeALK = length(grep(tumorfreemat[,10],pattern = "Amino"))
+tumorfreeKRAS = length(grep(tumorfreemat[,11],pattern = "Amino"))
+
+# (2) Mutations vs. with tumor diagnosis
+withtumoridx = grep(mergedframe$`Neoplasm Cancer Status`, pattern ="with tumor")
+withtumormat = mergedframe[c(withtumoridx),]
+withtumorEGFR = length(grep(withtumormat[,9],pattern = "Amino"))
+withtumorALK = length(grep(withtumormat[,10],pattern = "Amino"))
+withtumorKRAS = length(grep(withtumormat[,11],pattern = "Amino"))
+
+# (1) 
+plot(c(tumorfreeEGFR,tumorfreeALK,tumorfreeKRAS), main = "Tumor Free", ylab = "Frequency", xlab = "", axes = FALSE)
+axis(1, at = c(1,2,3), labels = c("EGFR","ALK", "KRAS"))
+axis(2, at = 0:50)
+
+# (2)
+plot(c(withtumorEGFR,withtumorALK,withtumorKRAS), main = "With Tumor", ylab = "Frequency", xlab = "", axes = FALSE)
+axis(1, at = c(1,2,3), labels = c("EGFR", "ALK", "KRAS"))
+axis(2, at = 0:15)
+
+```
+
+Based on the tumor free graph, it can be seen that there is a high chance of being tumor free with a KRAS mutation, while its less likely for the other mutations. However, this may not be conclusive as there may just be a larger number of KRAS mutations present vs the other mutations in the data set.
+
+Based on the with tumor graph, it can be seen that there is still a high chance of having a tumor with the KRAS mutation, while its less likely for the other mutations. There is an increase in the amount of EGFR mutations vs the ALK mutation but this might be due to a larger amount of EGFR mutations present. 
+
+Due to this difference in quantity within the different mutations present in the data set, we cannot statistically prove that the KRAS mutation is the only significant one. Therefore, I want to further analyze the relationship between neoplasm status vs the different mutations. This will be analyzed by creating a contingency matrix between a mutation being present vs not present and a tumor being present vs not present. The p-values and odd's ratio will then be analyzed.
+
+```{r Neoplasm vs mutation contingency}
+
+# Create a data frame to analyze the data with
+tumorstatus = merge(withtumormat,tumorfreemat, all = TRUE)
+
+# Create a table for the EGFR and Neoplasm status
+
+# Preallocate variables to store the contingency table values
+n = 0
+o = 0
+p = 0
+q = 0
+
+# Loop through the mutation data frame and find the relationship between EGFR and tumor status
+for(i in 1:nrow(tumorstatus)){
+  if(is.na(tumorstatus$EGFR[i]) == FALSE & grepl(tumorstatus$`Neoplasm Cancer Status`[i], pattern = "tumor free") == TRUE){
+    n = n + 1
+  }
+  if(is.na(tumorstatus$EGFR[i]) == TRUE & grepl(tumorstatus$`Neoplasm Cancer Status`[i], pattern = "tumor free") == TRUE){
+    o = o + 1
+  }
+  if(is.na(tumorstatus$EGFR[i]) == FALSE & grepl(tumorstatus$`Neoplasm Cancer Status`[i], pattern = "with tumor") == TRUE){
+    p = p + 1
+  }
+  if(is.na(tumorstatus$EGFR[i]) == TRUE & grepl(tumorstatus$`Neoplasm Cancer Status`[i], pattern = "with tumor") == TRUE){
+    q = q + 1
+  }
+}
+
+# Create the actual matrix and perform Fisher's exact test
+EGFRandTumor = matrix(c(n, p, o, q), nrow = 2, ncol = 2)
+dimnames(EGFRandTumor) = list(c('Tumor Free','With Tumor'),c('EGFR w/ Mut','EGFR w/o Mut'))
+EGFRandTumor_fisher = fisher.test(EGFRandTumor)
+
+#----------------------------------------------------------------------------------------
+
+# Create a table for the KRAS and neoplasm status
+
+# Preallocate variables to store the contingency table values
+r = 0
+s = 0
+t = 0
+u = 0
+
+# loop through the mutation data frame and ifn the relationship between KRAS and tumor status
+for(i in 1:nrow(tumorstatus)){
+  if(is.na(tumorstatus$ALK[i]) == FALSE & grepl(tumorstatus$`Neoplasm Cancer Status`[i], pattern = "tumor free") == TRUE){
+    r = r + 1
+  }
+  if(is.na(tumorstatus$ALK[i]) == TRUE & grepl(tumorstatus$`Neoplasm Cancer Status`[i], pattern = "tumor free") == TRUE){
+    s = s + 1
+  }
+  if(is.na(tumorstatus$ALK[i]) == FALSE & grepl(tumorstatus$`Neoplasm Cancer Status`[i], pattern = "with tumor") == TRUE){
+    t = t + 1
+  }
+  if(is.na(tumorstatus$ALK[i]) == TRUE & grepl(tumorstatus$`Neoplasm Cancer Status`[i], pattern = "with tumor") == TRUE){
+    u = u + 1
+  }
+}
+# Create the actual matrix and perform Fisher's exact test
+ALKandTumor = matrix(c(r, t, s, u), nrow = 2, ncol = 2)
+dimnames(ALKandTumor) = list(c('Tumor Free','With Tumor'),c('ALK w/ Mut','ALK w/o Mut'))
+ALKandTumor_fisher = fisher.test(ALKandTumor)
+
+#----------------------------------------------------------------------------------------
+
+# Create a table for the KRAS and neoplasm status
+
+# Preallocate variables to store the contingency table values
+v = 0
+w = 0
+x = 0
+y = 0
+
+# loop through the mutation data frame and ifn the relationship between KRAS and tumor status
+for(i in 1:nrow(tumorstatus)){
+  if(is.na(tumorstatus$KRAS[i]) == FALSE & grepl(tumorstatus$`Neoplasm Cancer Status`[i], pattern = "tumor free") == TRUE){
+    v = v + 1
+  }
+  if(is.na(tumorstatus$KRAS[i]) == TRUE & grepl(tumorstatus$`Neoplasm Cancer Status`[i], pattern = "tumor free") == TRUE){
+    w = w + 1
+  }
+  if(is.na(tumorstatus$KRAS[i]) == FALSE & grepl(tumorstatus$`Neoplasm Cancer Status`[i], pattern = "with tumor") == TRUE){
+    x = x + 1
+  }
+  if(is.na(tumorstatus$KRAS[i]) == TRUE & grepl(tumorstatus$`Neoplasm Cancer Status`[i], pattern = "with tumor") == TRUE){
+    y = y + 1
+  }
+}
+# Create the actual matrix and perform Fisher's exact test
+KRASandTumor = matrix(c(v, x, w, y), nrow = 2, ncol = 2)
+dimnames(KRASandTumor) = list(c('Tumor Free','With Tumor'),c('KRAS w/ Mut','KRAS w/o Mut'))
+KRASandTumor_fisher = fisher.test(KRASandTumor)
+
+# Create a final matrix that outputs the different mutations and their odds ratio and p values
+neoplasmcontingency = matrix(c(EGFRandTumor_fisher$estimate, ALKandTumor_fisher$estimate, KRASandTumor_fisher$estimate, EGFRandTumor_fisher$p.value, ALKandTumor_fisher$p.value, KRASandTumor_fisher$p.value),nrow = 3, ncol = 2)
+dimnames(neoplasmcontingency) = list(c('EGFR and Tumor','ALK and Tumor', 'KRAS and Tumor'),c('Odds Ratio','P-Value'))
+
+EGFRandTumor
+ALKandTumor
+KRASandTumor
+neoplasmcontingency
+```
+
+Based on the values outputted from the contingency tables and the Fisher's test, the hypothesis can be confirmed that ALK is the most important variable regarding Neoplasm status. While the counts in the previous graphs did not aid the hypothesis, the p-value outputted from the Fisher's test is significant and shows that the relationship between ALK and tumor status are not independent. Therefore, we can reject the null and accept the alternate: that ALK and tumor status are correlated while the other mutations are not. 
+
+References
+
+[1] https://www.ajpmonline.org/article/S0749-3797(16)30094-0/pdf#targetText=Context%3A%20The%20onset%20of%20cigarette,clarified%20the%20determinants%20of%20onset.
+
