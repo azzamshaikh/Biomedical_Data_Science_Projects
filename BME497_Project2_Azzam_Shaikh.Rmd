@@ -1,0 +1,596 @@
+---
+title: "BME497_Project2_Azzam"
+author: "Azzam Shaikh"
+date: "11/12/2019"
+output:
+  html_document: default
+  pdf_document: default
+  word_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+```
+
+Project 2
+
+Step 1: Import and clean data set
+```{r Import Data}
+# Set directory to current folder and store location 
+setwd("C:/Users/Owner/Documents/Penn State/Senior/BME 497/Project 2/")
+dir = getwd()
+
+# Create a list of the files in the current directory
+dirFiles = list.dirs(dir, full.names = T)
+
+# Create a general expression to get into the 'Clinical_informations' folder
+data = grep('Project 2/Data',dirFiles)
+
+# Open only a specified file
+rawdatafile = list.files(dirFiles[data],pattern = "Data_Project2", ignore.case = F)
+catdatafile = list.files(dirFiles[data],pattern = "Category_descriptions", ignore.case = F)
+```
+a.Check the dates in R, to do this you will have to learn a little bit about handling dates. Check out the as.date() function https://www.statmethods.net/input/dates.html
+b.Check that the drug names match, look for capitalization issues and abbreviations, add the category descriptions from the Category_descriptions file to the dataframe that you are using. How many doxorubicin, cisplatin, 5-FU, and cisplatin oservations are there?
+c.Are there missing values? If so what should you do with them?
+  i.    Omit the observation?
+  ii.    Interpolate?? But how?
+    1.    Take the average for the other observations (which observations?)
+    2.    Interpolate with a regression model? (which data?)
+
+```{r Clean Data, warning=FALSE}
+# Add openxlsx library access read.xlsx function
+library(openxlsx)
+
+# Extract the data in the 'Data_Project2' file  
+rawdata = read.xlsx(paste(dirFiles[data],"/",rawdatafile,sep = ""), sheet = 1, startRow = 1, colNames = T, detectDates = T)
+
+# Clean up the dates
+for(i in 1:length(rawdata$Date)){
+  if(grepl(rawdata$Date[i], pattern = "^[A-Z]{3}") == TRUE){
+    rawdata$Date[i] = as.character(as.Date(rawdata$Date[i],format = "%b-%d-%Y"))
+  }
+  else if(grepl(rawdata$Date[i], pattern = "^[0-9]{5}") == TRUE){
+   rawdata$Date[i] = as.character(as.Date(as.numeric(rawdata$Date[i]), origin = "1899-12-30"))
+  }
+}
+
+# Correct drug capitalization
+library(tools)
+rawdata$Drug = toTitleCase(rawdata$Drug)
+rawdata$Drug = sub(pattern = "5-Fluorouracil", replacement = "5-FU",rawdata$Drug)
+rawdata$Drug = sub(pattern = "Pemetrexed", replacement = "Permetrexed", rawdata$Drug)
+rawdata$Drug = sub(pattern = "Vinorelbine", replacement = "Vinolrebine", rawdata$Drug)
+rawdata$Drug = sub(pattern = "mitomycinC", replacement = "MitomycinC", rawdata$Drug)
+
+# REMOVE BEFORE SUBMISSION
+sampleset = rawdata
+
+# Extract the data in the 'Category_descriptions' file
+catdata = read.xlsx(paste(dirFiles[data],"/",catdatafile,sep = ""), sheet = 1, startRow = 1, colNames = F,rowNames = F)
+
+# Reorder the categories in an easier to read method
+catdata = as.matrix(catdata)
+catdata[1:14,7] = catdata[1:14,5] 
+catdata[1:14,5] = NA
+catdata[22:24,7] = catdata[22:24,5]
+catdata[22:24,5] = NA
+catdata[30:34,7] = catdata[30:34,6]
+catdata[30:34,6] = NA
+catdata = cbind(matrix(nrow = nrow(catdata),ncol = 1),catdata)
+catdata[,1] = catdata[,8]
+catdata = catdata[,-8]
+catdata = as.data.frame(catdata)
+colnames(catdata) = c("Drug","Damage Numeric","Damage Description","Damage/Disruptor Numeric","Damage/Disruptor Description","Stabilization/Gene Numeric","Stabilization/Gene Description")
+
+# REMOVE BEFORE SUBMISSION
+catsample = catdata
+
+
+# Check to see how many of the data is missing from the dataset
+numNA = sum(is.na(rawdata[,4:11]))
+
+# Since there are a total of 19 NA values that are missing out of the 5,784 observations (8 genes x 723 observations), or less that 0.5% of the data, I have decided to omit those rows containing the NA's
+removedNAdata = na.omit(rawdata)
+
+# Merge the data files by Drug names and keeping all classified and unclassified data
+dataset = merge(removedNAdata,catdata, by.y = "Drug", all.x = T)
+
+# Create NovelPred data - this will contain all the unclassified data
+library(dplyr)
+classifeddata = merge(removedNAdata,catdata, by.y = "Drug", all.x = F)
+NovelPred = anti_join(removedNAdata,classifeddata)
+
+# How many doxorubicin, cisplatin, 5-FU, and cisplatin oservations are there?
+
+numdoxorubicin = length(grep(dataset$Drug, pattern = "Doxorubicin"))
+numdoxorubicin
+numcisplatin = length(grep(dataset$Drug, pattern = "Cisplatin"))
+numcisplatin
+num5Fu = length(grep(dataset$Drug, pattern = "5-FU"))
+num5Fu
+
+
+# Create separate vectors for different drug
+fu5 = dataset[grep(pattern = "5-FU",dataset$Drug),]
+doxo = dataset[grep(pattern = "Doxorubicin",dataset$Drug),]
+cisplatin = dataset[grep(pattern = "Cisplatin",dataset$Drug),]
+
+```
+How many doxorubicin, cisplatin, 5-FU, and cisplatin oservations are there?
+
+--> There are 141 doxorubicin observations, 41 cisplatin observations, and 160 5-FU observations.
+
+--------------------------------------------------------------------------------------------------
+2.    QC the data, note that 5-FU, Doxorubicin and Cisplatin were run MANY times.
+  a.Is there a trend versus %death for any drug?
+  b.If there are trends, what should you do?
+    i.    You could correct the data for the systematic trend with regression
+    ii.    You could omit data that fall outside of a “control limit”
+    iii.    Should we use all of the %Dead data, is there a control limit that is reproducible?
+
+```{r Death Trends}
+# As I have not seen any of the drugs in relation to these genes in prior situations, I do not have any assumption regarding what I expect from these plots. 
+
+#-------5-FU---------
+# Create plots for the 5-FU drug and see which gene is significant
+
+par(mfrow=c(1,1))
+
+# Based on the graph, it seems like the mean of % dead with this drug is between 80 and 90%. However, it looks like there are two outliers near the 70% area.
+plot(fu5$`%Dead`)
+par(mfrow=c(2,2))
+plot(fu5$`%Dead`,fu5$shP53, xlab = "% Dead", ylab = "P53")  #Based on this plot, its seems like shPH53 has a positive, linear relationship 
+plot(fu5$`%Dead`,fu5$shCHK2, xlab = "% Dead", ylab = "CHK2") #Based on this plot, its seems like shCHK2 has a straight relationship 
+plot(fu5$`%Dead`,fu5$shATR, xlab = "% Dead", ylab = "ATR")  #Based on this plot, it can not be visually concludedthat there is a relationship 
+plot(fu5$`%Dead`,fu5$shCHK1, xlab = "% Dead", ylab = "CHK1") #Based on this plot, it can not be visually concludedthat there is a relationship 
+par(mfrow=c(2,2))
+plot(fu5$`%Dead`,fu5$shATX, xlab = "% Dead", ylab = "ATX")   #Based on this plot, its seems like shATX has a straight relationship  
+plot(fu5$`%Dead`,fu5$shDNAPK, xlab = "% Dead", ylab = "DNAPK") #Based on this plot, it can not be visually concludedthat there is a relationship 
+plot(fu5$`%Dead`,fu5$shBOK, xlab = "% Dead", ylab = "BOK")   #Based on this plot, it can not be visually concludedthat there is a relationship 
+plot(fu5$`%Dead`,fu5$shBIM, xlab = "% Dead", ylab = "BIM")   #Based on this plot, it can not be visually concludedthat there is a relationship 
+
+# I wanted to create a mulitclass linear model to see which of the genes would be significant in predicting the % dead.
+fu5lm = lm(fu5$`%Dead`~fu5$shP53+fu5$shCHK2+fu5$shATR+fu5$shCHK1+fu5$shATX+fu5$shDNAPK+fu5$shBOK+fu5$shBIM)
+summary(fu5lm)
+# According to the model summary, mechanisms shP53, shATX, and shBOK is significant. P53 an BOK show an increased % dead for 5-Fu. Whle ATX showed a decrease in % dead.
+par(mfrow=c(1,1))
+plot(fu5lm)
+# Based on the residuals vs leverage plot, there seems to be one/two outliers which lines up with the scatter plot 
+
+#----Doxotorubin----
+# Create plots for the doxotorubin drug and see which gene is significant
+
+par(mfrow=c(1,1))
+# Based on the graph, it seems like the range of % dead with this drug is between 80 and 90%. However, it looks like there are multiple outliers near the 60% area.
+plot(doxo$`%Dead`)
+par(mfrow=c(2,2))
+plot(doxo$`%Dead`,doxo$shP53, xlab = "% Dead", ylab = "P53")  #Based on this plot, its seems like shPH53 has a positive, linear relationship 
+plot(doxo$`%Dead`,doxo$shCHK2, xlab = "% Dead", ylab = "CHK2") #Based on this plot, its seems like shCHK2 has a positive, linear relationship 
+plot(doxo$`%Dead`,doxo$shATR, xlab = "% Dead", ylab = "ATR")  #Based on this plot, its seems like shATR has a positive, linear relationship 
+plot(doxo$`%Dead`,doxo$shCHK1, xlab = "% Dead", ylab = "CHK1") #Based on this plot, it can not be visually concludedthat there is a relationship 
+par(mfrow=c(2,2))
+plot(doxo$`%Dead`,doxo$shATX, xlab = "% Dead", ylab = "ATX")  #Based on this plot, its seems like shATX has a nonlinear relationship   
+plot(doxo$`%Dead`,doxo$shDNAPK, xlab = "% Dead", ylab = "DNAPK")#Based on this plot, it can not be visually concludedthat there is a relationship 
+plot(doxo$`%Dead`,doxo$shBOK, xlab = "% Dead", ylab = "BOK")  #Based on this plot, its seems like shATX has a straight relationship  
+plot(doxo$`%Dead`,doxo$shBIM, xlab = "% Dead", ylab = "BIM")  #Based on this plot, its seems like shPH53 has a positive, linear relationship 
+
+# I wanted to create a mulitclass linear model to see which of the genes would be significant in predicting the % dead.
+doxolm = lm(doxo$`%Dead`~doxo$shP53+doxo$shCHK2+doxo$shATR+doxo$shCHK1+doxo$shATX+doxo$shDNAPK+doxo$shBOK+doxo$shBIM)
+summary(doxolm)
+# According to the model summary, mechanisms shCHPK2, shATX, and shDNAPK is significant. CHPk2 and DNAPK show an increased % dead for 5-Fu. Whle ATX showed a decrease in % dead.
+par(mfrow=c(1,1))
+plot(doxolm)
+# Based on the residuals vs leverage plot, there seems to be one outlier and a few close to that point which lines up with the scatter plot 
+#----Doxotorubin----
+# Create plots for the cisplatin drug and see which gene is significant
+
+par(mfrow=c(1,1))
+# Based on the graph, it seems like the range of % dead with this drug is between 80 and 90%. However, it looks like there is one outliers near the 70% area.
+plot(cisplatin$`%Dead`)
+par(mfrow=c(2,2))
+plot(cisplatin$`%Dead`,cisplatin$shP53, xlab = "% Dead", ylab = "P53")  #Based on this plot, its seems like shPH53 has a positive, linear relationship 
+plot(cisplatin$`%Dead`,cisplatin$shCHK2, xlab = "% Dead", ylab = "CHK2") #Based on this plot, its seems like shCHK2 has a positive, linear relationship 
+plot(cisplatin$`%Dead`,cisplatin$shATR, xlab = "% Dead", ylab = "ATR")  #Based on this plot, it can not be visually concludedthat there is a relationship 
+plot(cisplatin$`%Dead`,cisplatin$shCHK1, xlab = "% Dead", ylab = "CHK1") #Based on this plot, it can not be visually concludedthat there is a relationship 
+par(mfrow=c(2,2))
+plot(cisplatin$`%Dead`,cisplatin$shATX, xlab = "% Dead", ylab = "ATK")  #Based on this plot, it can not be visually concludedthat there is a relationship 
+plot(cisplatin$`%Dead`,cisplatin$shDNAPK, xlab = "% Dead", ylab = "DNAPK")#Based on this plot, its seems like shDNAPK has a positive, linear relationship 
+plot(cisplatin$`%Dead`,cisplatin$shBOK, xlab = "% Dead", ylab = "BOK")  #Based on this plot, it can not be visually concludedthat there is a relationship 
+plot(cisplatin$`%Dead`,cisplatin$shBIM, xlab = "% Dead", ylab = "BIM")  #Based on this plot, it can not be visually concludedthat there is a relationship 
+
+# I wanted to create a mulitclass linear model to see which of the genes would be significant in predicting the % dead.
+cisplatinlm = lm(cisplatin$`%Dead`~cisplatin$shP53+cisplatin$shCHK2+cisplatin$shATR+cisplatin$shCHK1+cisplatin$shATX+cisplatin$shDNAPK+cisplatin$shBOK+cisplatin$shBIM)
+summary(cisplatinlm)
+# According to the model summary, mechanisms shCHPK2 and shDNAPK is significant. CHPk2 and DNAPK show an increased % dead for 5-Fu. 
+par(mfrow=c(1,1))
+plot(cisplatinlm)
+# Based on the residuals vs leverage plot, there seems to be multiple outliers which lines up with the scatter plot
+
+# Develop control limits for the three selected drugs 
+
+# Create a histogram for the 5-FU drug and overlay a density distribution over the histogram
+hist(fu5$`%Dead`, prob = TRUE, col = "grey", main = "5-FU and % Dead", xlab = "Percent Dead")
+lines(density(fu5$`%Dead`), col = "blue",lwd = 2)
+fu5sd = sd(fu5$`%Dead`)
+fu5mean = mean(fu5$`%Dead`)
+fu5lb = fu5mean - 2*fu5sd
+fu5ub = fu5mean + 2*fu5sd
+#i = fu5$`%Dead` >= fu5lb & fu5$`%Dead` <= fu5ub
+#polygon(c(fu5lb,fu5$`%Dead`[i],fu5ub),c(0.04,fu5$`%Dead`[i],0.04),col = "red")
+
+# Create a histogram for the doxotorubin drug and overlay a density distribution over the histogram
+hist(doxo$`%Dead`, prob = TRUE, col = "grey", main = "Doxo and % Dead", xlab = "Percent Dead")
+lines(density(doxo$`%Dead`), col = "blue",lwd = 2)
+doxosd = sd(doxo$`%Dead`)
+doxomean = mean(doxo$`%Dead`)
+doxolb = doxomean - 2*doxosd
+doxoub = doxomean + 2*doxosd
+
+# Create a histogram for the cisplatin drug and overlay a density distribution over the histogram
+hist(cisplatin$`%Dead`, prob = TRUE, col = "grey", main = "Cisplatin and % Dead", xlab = "Percent Dead")
+lines(density(cisplatin$`%Dead`), col = "blue",lwd = 2)
+cisplatinsd = sd(cisplatin$`%Dead`)
+cisplatinmean = mean(cisplatin$`%Dead`)
+cisplatinlb = cisplatinmean - 2*cisplatinsd
+cisplatinub = cisplatinmean + 2*cisplatinsd
+
+
+# Create a control limit for the data. This control limit will be +- 2 standard deviations.
+# After the control limit is defined, we can create new histographs with the correct data
+
+# Control limit for 5-FU
+fu5outsidebound = matrix(data = NA, nrow=nrow(fu5),ncol = 1)
+counter = 1
+for(i in 1:nrow(fu5)){
+  if(fu5$`%Dead`[i] < fu5lb){
+    fu5outsidebound[counter] = i
+    counter = counter + 1
+  }
+  else if(fu5$`%Dead`[i] > fu5ub){
+    fu5outsidebound[counter] = i
+    counter = counter + 1
+  }
+}
+fu5outsidebound = na.omit(fu5outsidebound)
+fu5 = fu5[-fu5outsidebound,] 
+hist(fu5$`%Dead`,prob = TRUE, col = "grey", main = "5-FU and % Dead", xlab = "Percent Dead")
+lines(density(fu5$`%Dead`), col = "blue",lwd = 2)
+
+# Control limit for doxo
+doxooutsidebound = matrix(data = NA, nrow=nrow(doxo),ncol = 1)
+counter = 1
+for(i in 1:nrow(doxo)){
+  if(doxo$`%Dead`[i] < doxolb){
+    doxooutsidebound[counter] = i
+    counter = counter + 1
+  }
+  else if(doxo$`%Dead`[i] > doxoub){
+    doxooutsidebound[counter] = i
+    counter = counter + 1
+  }
+}
+doxooutsidebound = na.omit(doxooutsidebound)
+doxo = doxo[-doxooutsidebound,] 
+hist(doxo$`%Dead`,prob = TRUE, col = "grey", main = "Doxo and % Dead", xlab = "Percent Dead")
+lines(density(doxo$`%Dead`), col = "blue",lwd = 2)
+
+# Control limit for cisplatin
+cisoutsidebound = matrix(data = NA, nrow=nrow(cisplatin),ncol = 1)
+counter = 1
+for(i in 1:nrow(cisplatin)){
+  if(cisplatin$`%Dead`[i] < cisplatinlb){
+    cisplatin[counter] = i
+    counter = counter + 1
+  }
+  else if(cisplatin$`%Dead`[i] > cisplatinub){
+    cisoutsidebound[counter] = i
+    counter = counter + 1
+  }
+}
+cisoutsidebound = na.omit(cisoutsidebound)
+if(length(cisoutsidebound) > 0){
+cisplatin = cisplatin[-cisoutsidebound,]   
+}
+hist(cisplatin$`%Dead`, prob = TRUE, col = "grey", main = "Cisplatin and % Dead", xlab = "Percent Dead")
+lines(density(cisplatin$`%Dead`), col = "blue",lwd = 2)
+
+```
+3.    What is the average distance between drugs in the same category using a Euclidean metric or a Correlation metric for the categories in “Category_description”
+
+```{r Step 3}
+# Create two datasets based on DNA damage or no DNA damage
+cat1 = dataset[grep(pattern = "1", dataset$`Damage Numeric`),]
+cat2 = dataset[grep(pattern = "2", dataset$`Damage Numeric`),]
+
+# Preallocate an empty matrix for the distance for DNA damage
+cat1distances = matrix(data = NA, ncol = 8, nrow = 1)
+
+# Loop throught the DNA damage dataset to get the mean euclidean distances
+counter = 1
+for(i in 4:11){
+  cat1distances[1,counter] = mean(dist(cat1[,i],method = "euclidean"))
+  counter = counter + 1
+}
+
+# Use NA.OMIT and recalculate the values that werent calculated. Plot the distances for each gene
+cat1distances[1,4] = mean(dist(na.omit(cat1[,7]),method = "euclidean"))
+cat1distances[1,6] = mean(dist(na.omit(cat1[,9]),method = "euclidean"))
+cat1distances[1,8] = mean(dist(na.omit(cat1[,11]),method = "euclidean"))
+#colnames(cat1distances) = c("shP53", "shCHK2", "shATR", "shCHK1", "shATX", "shDNAPK", "shBOK", "shBIM")
+par(mfrow=c(1,2))
+plot(t(cat1distances), main = "Average Distance between\n Drugs for Category 1", xlab = "Gene", ylab = "Average Euclidian Distance")
+
+
+# Repeat the steps done with cat1 to cat2
+cat2distances = matrix(data = NA, ncol = 8, nrow = 1)
+counter = 1
+for(i in 4:11){
+  cat2distances[1,counter] = mean(dist(cat2[,i],method = "euclidean"))
+  counter = counter + 1
+}
+cat2distances[5] = mean(dist(na.omit(cat2[,8]),method = "euclidean"))
+cat2distances[6] = mean(dist(na.omit(cat2[,9]),method = "euclidean"))
+plot(t(cat2distances),main = "Average Distance between\n Drugs for Category 2", xlab = "Gene", ylab = "Average Euclidian Distance")
+```
+4.    Build multiple binary classifiers for DNA damage versus not DNA damage. Note that this is a 2 class problem
+
+---NO LONGER NEEDED---
+```{r Step 4}
+# Create a logistic regression model for DNA damage/No DNA damage vs the 8 genes to see which gene is significant
+# set.seed(100)
+# model = glm(`Damage Description` ~ shP53 + shCHK2 + shATR + shCHK1 + shATX + shDNAPK + shBOK + shBIM, data = dataset, family = binomial)
+# summary(model)
+# 
+# # significant: CHK2, P53, CHK1
+# 
+# # Create a prediction using the model
+# pred = predict(model, type = "response")
+# model2 = rep("NotDNAdamage", length(pred))
+# model2[pred > 0.5] = "DNAdamage"
+# table(model2, na.omit(dataset$`Damage Description`)[1:587])
+
+# 39 + 27 = 66 --> 66/587 = 11% correct
+# 279+242 = 521 --> 521/587 = 89% incorrect
+
+# The matrix tell us that the top row is the dna damage  while the column tell us the models prediction. There are 39 instances where the damage is present and the model predicted the same; 27 instances where the damage is not present and the prediction is up as well; 
+
+#train = dataset[1:(nrow(dataset)/2),]
+#test = dataset[(nrow(dataset)/2)+1:726,]
+
+# Create another prediction using LDA method
+#train = sample(nrow(dataset),(nrow(dataset)/2))
+#trainingdata = dataset[train,]
+#testdata = dataset[-train,]
+
+
+# library(MASS)
+# model3 = lda(`Damage Description` ~ shP53 + shCHK2 + shATR + shCHK1 + shATX + shDNAPK + shBOK + shBIM, data = trainingdata)
+# model3
+# 
+# pred_lda = predict(model3, testdata)
+# table(pred_lda$class, testdata$`Damage Description`)
+
+
+```
+6.    Build multiclass classifiers for all levels of categories in the category descriptions
+  a.    Use multiclass Logistic Regression (not covered in class), K-NN, and LDA
+  b.    If you make predictions for all drugs in the data set that aren’t in the category descriptions, what predictions do you get?
+  c.    Do you believe your predictions? Examine at least 2 drugs carefully.
+```{r Step 6}
+# If you recall the graphs from the % dead vs genes, there were a lot of graphs that were linearly trending. Due to this occurennce, I am expecting the relationship between the classifications to be the same. Therefore, I want to test LDA and logisitc regresion because LDA will show accuracy for a linear relationship between the 8 predictors while the logistic regression will show if there is a different type of linear relationship between the 8 predictos.
+
+# I want to use a validation set approach for selecting the best model with different splits. 
+set.seed(10)
+train = sample(nrow(classifeddata),(nrow(classifeddata)*0.8))
+trainingdata = classifeddata[train,]
+testdata = classifeddata[-train,] # save for later
+
+# Create 3 data splits within the training data: split into 3rds, 5ths, and 10th and run the LDA and logistic regression models to see the best fit
+
+# Split into 3rds
+mocktrain3 = sample(nrow(trainingdata),(nrow(trainingdata)/3))
+mocktrainingdata3 = trainingdata[mocktrain3,]
+mocktestingdata3 = (trainingdata[-mocktrain3,])
+
+# LDA on 3rds
+library(MASS)
+mockLDA3 = lda(`Damage/Disruptor Description` ~ shP53 + shCHK2 + shATR + shCHK1 + shATX + shDNAPK + shBOK + shBIM, data = mocktrainingdata3)
+
+mockLDA3pred = predict(mockLDA3, mocktestingdata3)
+table(mockLDA3pred$class, mocktestingdata3$`Damage/Disruptor Description`)
+mean(na.omit(mockLDA3pred$class == mocktestingdata3$`Damage/Disruptor Description`)) #95.84% accuracy
+
+# LOG on 3rds
+mockLOG3 = nnet::multinom(`Damage/Disruptor Description` ~ shP53 + shCHK2 + shATR + shCHK1 + shATX + shDNAPK + shBOK + shBIM, data = mocktrainingdata3)
+
+mockLOGpred3 = predict(mockLOG3,mocktestingdata3)
+a = table(mockLOGpred3,mocktestingdata3$`Damage/Disruptor Description`)
+diagsumLOGpred3 = diag(prop.table(a))
+sum(diagsumLOGpred3)#93.33% accuracy
+
+#------------------------------------
+
+# Split into 5ths
+mocktrain5 = sample(nrow(trainingdata),(nrow(trainingdata)/5))
+mocktrainingdata5 = trainingdata[mocktrain5,]
+mocktestdata5 = (trainingdata[-mocktrain5,])
+
+# LDA on 5ths
+mockLDA5 = lda(`Damage/Disruptor Description` ~ shP53 + shCHK2 + shATR + shCHK1 + shATX + shDNAPK + shBOK + shBIM, data = mocktrainingdata5)
+
+mockLDA5pred = predict(mockLDA5, mocktestdata5)
+table(mockLDA5pred$class, mocktestdata5$`Damage/Disruptor Description`)
+mean(na.omit(mockLDA5pred$class == mocktestdata5$`Damage/Disruptor Description`)) #96.81% accuracy
+
+# LOG on 5ths
+mockLOG5 = nnet::multinom(`Damage/Disruptor Description` ~ shP53 + shCHK2 + shATR + shCHK1 + shATX + shDNAPK + shBOK + shBIM, data = mocktrainingdata5)
+
+mockLOGpred5 = predict(mockLOG5,mocktestdata5)
+b = table(mockLOGpred5,mocktestdata5$`Damage/Disruptor Description`)
+diagsumLOGpred5 = diag(prop.table(b))
+sum(diagsumLOGpred5)#91.48% accuracy
+
+#------------------------------------
+
+# Split into 10ths
+mocktrain10 = sample(nrow(trainingdata),(nrow(trainingdata)/10))
+mocktrainingdata10 = trainingdata[mocktrain10,]
+mocktestdata10 = (trainingdata[-mocktrain10,])
+
+# LDA on 10ths
+mockLDA10 = lda(`Damage/Disruptor Description` ~ shP53 + shCHK2 + shATR + shCHK1 + shATX + shDNAPK + shBOK + shBIM, data = mocktrainingdata10)
+
+mockLDA10pred = predict(mockLDA10, mocktestdata10)
+table(mockLDA10pred$class, mocktestdata10$`Damage/Disruptor Description`)
+mean(na.omit(mockLDA10pred$class == mocktestdata10$`Damage/Disruptor Description`)) #86.76% accuracy
+
+# LOG on 10ths
+mockLOG10 = nnet::multinom(`Damage/Disruptor Description` ~ shP53 + shCHK2 + shATR + shCHK1 + shATX + shDNAPK + shBOK + shBIM, data = mocktrainingdata10)
+
+mockLOGpred10 = predict(mockLOG10,mocktestdata10)
+c = table(mockLOGpred10,mocktestdata10$`Damage/Disruptor Description`)
+diagsumLOGpred10 = diag(prop.table(c))
+sum(diagsumLOGpred10)#63.59% accuracy
+
+# Based off the results of this validation set, the multiclass method that had the best success was the LDA model for all splits. Between all the LDA models, the split that worked the best was a 1/3rd split. This makes sense as the 1/3 has a larger sample size to be able to make better predictions. Because th 1/3rd split was the best, I will do another model for the second subclassifications as a comparison for the actual testing. 
+
+# LDA on 3rd for second subclassification
+library(MASS)
+mockLDA3_2nd = lda(`Stabilization/Gene Description` ~ shP53 + shCHK2 + shATR + shCHK1 + shATX + shDNAPK + shBOK + shBIM, data = mocktrainingdata3)
+
+mockLDA3pred_2nd = predict(mockLDA3_2nd, mocktestingdata3)
+table(mockLDA3pred_2nd$class, mocktestingdata3$`Stabilization/Gene Description`)
+mean(na.omit(mockLDA3pred_2nd$class == mocktestingdata3$`Stabilization/Gene Description`)) #89.09% accuracy
+
+# LOG on 3rds
+mockLOG3_2nd = nnet::multinom(`Stabilization/Gene Description` ~ shP53 + shCHK2 + shATR + shCHK1 + shATX + shDNAPK + shBOK + shBIM, data = mocktrainingdata3)
+
+mockLOGpred3_2nd = predict(mockLOG3_2nd,mocktestingdata3)
+d = table(mockLOGpred3_2nd,mocktestingdata3$`Stabilization/Gene Description`)
+diagsumLOGpred3_2nd = diag(prop.table(d))
+sum(diagsumLOGpred3_2nd)#90.90% accuracy
+
+# ------------------------------------------------
+# Apply both models on the full 80/20 sets and see error
+LDA1 = lda(`Damage/Disruptor Description` ~ shP53 + shCHK2 + shATR + shCHK1 + shATX + shDNAPK + shBOK + shBIM, data = trainingdata)
+
+LDA1pred = predict(LDA1,testdata)
+e = table(LDA1pred$class,testdata$`Damage/Disruptor Description`)
+diagsumLDAsub1pred = diag(prop.table(e))
+sum(diagsumLDAsub1pred)
+# The LDA for the first subclassification is 91.52% This is 4% lower than the 1/3 mock.
+
+
+LOG = nnet::multinom(`Damage/Disruptor Description` ~ shP53 + shCHK2 + shATR + shCHK1 + shATX + shDNAPK + shBOK + shBIM, data = trainingdata)
+
+LOGpred = predict(LOG,testdata)
+f = table(LOGpred,testdata$`Damage/Disruptor Description`)
+diagsumLOGsub1pred = diag(prop.table(f))
+sum(diagsumLOGsub1pred)
+
+# The logistic regression for the first subclassification is 93.22% This is 1% higher than the 1/3 mock test set.
+# ------------------------------------------------
+LDA2 = lda(`Stabilization/Gene Description` ~ shP53 + shCHK2 + shATR + shCHK1 + shATX + shDNAPK + shBOK + shBIM, data = trainingdata)
+
+LDA2pred = predict(LDA2,testdata)
+g = table(LDA2pred$class,testdata$`Stabilization/Gene Description`)
+diagsumLDAsub2pred = diag(prop.table(g))
+sum(diagsumLDAsub2pred)
+
+# The LDA for the second subclassification is 95% This is 6% higher than the 1/3 mock test set. This high percentage is most likely due to the small set of data within the 2nd subclassifcation
+
+LOG2 = lda(`Stabilization/Gene Description` ~ shP53 + shCHK2 + shATR + shCHK1 + shATX + shDNAPK + shBOK + shBIM, data = trainingdata)
+
+LOG2pred = predict(LOG2,testdata)
+h = table(LOG2pred$class,testdata$`Stabilization/Gene Description`)
+diagsumLOGsub2pred = diag(prop.table(h))
+sum(diagsumLOGsub2pred)
+
+# The logistic regression for the second subclassification is 95% This is 5% higher than the 1/3 mock test set.This high percentage is most likely due to the small set of data within the 2nd subclassifcation
+# ------------------------------------------------
+# Based on the results for the models created by the 80/20 test data vs the 1/3, the LDA model is more accurate. 
+# ------------------------------------------------
+# Run the LDA model onto the NovelPred data set
+
+NovelDataCat1 = predict(LDA1, NovelPred)
+
+NovelDataCat2 = predict(LDA2, NovelPred)
+
+UnclassifiedDataCat1 = as.data.frame(NovelDataCat1$class)
+
+UnclassifiedDataCat2 = as.data.frame(NovelDataCat2$class)
+
+NovelPred$`Damage/Disruptor Description` = UnclassifiedDataCat1
+
+NovelPred$`Stabilization/Gene Description` = UnclassifiedDataCat2
+
+```
+
+
+```{r}
+# Check to see if predictions are correct for drug 17-AAG. In order to this, I will be using PCA. THis is because there are 8 variables used to describe the classifications. It is extremely difficult trying to visualize what is essentially 8 degrees of freedom.
+
+# Extract the data for the 17-AAG that I am interested in looking at.
+drug = NovelPred[grep(pattern = "17-AAG", NovelPred$Drug),]
+# Remove the '%Dead'column
+drug = drug[,-2]
+# Remove the 'Date' column
+drug = drug[,-2]
+
+colnames(drug[,10]) = "Damage/Disruptor Description"
+colnames(drug[,11]) = "Stabilization/Gene Description"
+
+drug$`Damage/Disruptor Numeric` = as.numeric(drug$`Damage/Disruptor Description`)
+drug$`Stabilization/Gene Numeric`= as.numeric(drug$`Stabilization/Gene Description`)
+
+drugx = drug
+# Remove drug name
+drugx = drug[,-1]
+# Remove classification 1
+drugx = drugx[,-9]
+# Remove classification 2
+drugx = drugx[,-9]
+
+#------------------------PCA--------------------------
+
+# Load these libraries for use of different functions
+library("FactoMineR")
+library("factoextra")
+
+# Compute princial component analysis function on the drug
+drugxpca = PCA(drugx)
+
+# Get the eigenvalues from the PCA to see the amount of variantion retained by each principal component
+eig.val = get_eigenvalue(drugxpca)
+eig.val
+
+# Based the results of the eig.val, the first two principal components explains 71% of the variation which is an acceptably large percentage.
+
+res.desc = dimdesc(drugxpca, axes = c(1,2), proba = 0.05)
+# Description of dimension 1
+res.desc$Dim.1 #We can see that for dimension 1, the genes BOK and ATX and both classifications are significant
+res.desc$Dim.2 #We can see that for dimension 2, the two genes BIM an P53 are significant
+
+set.seed(100)
+
+# Use k means clustering to cluster the the coordinates of the different genes and classifiers vs the dimensions into two clusters
+res.km = kmeans(drugxpca$var$coord, centers = 2, nstart = 1)
+
+# Extract the differnt clusters
+grp = as.factor(res.km$cluster)
+
+# Plot the two clusters developed via k means and their vector directions to see how they relate
+fviz_pca_var(drugxpca, col.var = grp, 
+             palette = c("#0073C2FF", "#EFC000FF", "#868686FF"),
+             legend.title = "Cluster")
+# We can see that the cluster pointing to the right contain the two classifiers. Those classifiers are clustered in with the genes BIM, ATR, CHK1, and BOK. 
+
+# Plot a graph of the individuals points
+fviz_pca_ind(drugxpca, col.ind = "cos2", 
+             gradient.cols = c("#00AFBB", "#E7B800", "#FC4E07"),
+             repel = TRUE # Avoid text overlapping (slow if many points)
+             )
+# This graph seems to show that observation 92 was far from the others. Observation 92 might be the misclassified prediction. Due to this, I believe that observation 92 of the 17-AAG is considered to be a mitotic spindle disruptor that was misclasiffied.  
+```
